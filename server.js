@@ -1,214 +1,704 @@
 import http from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { open, readFile, rename, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const dbPath = join(__dirname, "data", "ink-stick-testing.json");
+const dbPath = process.env.INK_DB || join(__dirname, "data", "ink-stick-testing.json");
 const port = Number(process.env.PORT || 3037);
-const seed = {
-  "items": [
-    {
-      "code": "IS-001",
-      "smokeSource": "黄山松烟",
-      "glueRatio": "7.5%",
-      "ageYears": 8,
-      "storage": "恒湿柜B",
-      "status": "已试磨",
-      "logs": [
-        {
-          "at": "2026-06-11",
-          "step": "试磨",
-          "note": "宣纸20滴水，出墨快，评分86",
-          "score": 86
-        }
-      ]
-    },
-    {
-      "code": "IS-002",
-      "smokeSource": "桐油烟",
-      "glueRatio": "8%",
-      "ageYears": 3,
-      "storage": "试样盒C",
-      "status": "待试磨",
-      "logs": []
-    }
-  ]
-};
-const fields = [["code","墨锭编号","text"],["smokeSource","烟料来源","text"],["glueRatio","胶料比例","text"],["ageYears","存放年限","number"],["storage","存放位置","text"]];
-const stages = ["待试磨","已试磨","重点观察"];
-const statLabels = ["待试磨","已试磨","重点观察"];
-const extraFields = [["paper","试磨纸张"],["water","加水量"],["speed","出墨速度"],["colorLayer","墨色层次"],["sediment","沉淀情况"],["score","评分"]];
 
-async function loadDb() {
+/* ------------------------------------------------------------------ */
+/* 领域常量                                                            */
+/* ------------------------------------------------------------------ */
+
+export const STATUSES = ["draft", "pending", "approved", "rejected", "running", "cancel_review", "completed", "cancelled"];
+export const STATUS_LABEL = {
+  draft: "草稿",
+  pending: "待审核",
+  approved: "已批准",
+  rejected: "已驳回",
+  running: "执行中",
+  cancel_review: "待取消复核",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+const ACTIVE_STATUSES = ["pending", "approved", "running", "cancel_review"];
+
+const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+
+class HttpError extends Error {
+  constructor(status, code, details = undefined) {
+    super(code);
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 种子数据                                                            */
+/* ------------------------------------------------------------------ */
+
+function buildSeed() {
+  const db = {
+    version: 2,
+    seq: 2,
+    metrics: { conflictRejects: 0 },
+    users: [
+      { id: "u1", name: "墨雁", role: "试墨师" },
+      { id: "u2", name: "青岫", role: "复核师" },
+      { id: "u3", name: "松韵", role: "试墨师" },
+      { id: "admin", name: "玄伯（室长）", role: "管理员" },
+    ],
+    stations: [
+      { id: "ST-01", name: "青玉案研台" },
+      { id: "ST-02", name: "紫檀研台" },
+      { id: "ST-03", name: "精研防尘台" },
+    ],
+    items: [
+      { code: "IS-001", smokeSource: "黄山松烟", glueRatio: "7.5%", ageYears: 8, storage: "恒湿柜B" },
+      { code: "IS-002", smokeSource: "桐油烟", glueRatio: "8%", ageYears: 3, storage: "试样盒C" },
+      { code: "IS-003", smokeSource: "漆烟", glueRatio: "7%", ageYears: 12, storage: "恒湿柜A" },
+    ],
+    plans: [],
+    occupancy: [],
+    events: [],
+  };
+
+  const append = (e) => {
+    const prevHash = db.events.length ? db.events[db.events.length - 1].hash : "0".repeat(64);
+    const payload = [e.seq, e.ts, e.planId, e.action, e.actorId, JSON.stringify(e.detail), prevHash].join("|");
+    e.prevHash = prevHash;
+    e.hash = sha256(payload);
+    db.events.push(e);
+  };
+
+  const p1 = {
+    id: "PL-0001",
+    itemCode: "IS-001",
+    operatorId: "u1",
+    reviewerId: "u2",
+    stationId: "ST-01",
+    start: "2026-09-20T01:00:00.000Z",
+    end: "2026-09-20T02:30:00.000Z",
+    params: { paper: "净皮宣纸", waterDrops: 20, grindMinutes: 40, pressure: "中力", targetScore: 85, note: "隔年陈墨先醒 5 分钟" },
+    status: "approved",
+    reason: "",
+    result: "",
+    cancelReason: "",
+    createdAt: "2026-09-10T08:00:00.000Z",
+    createdBy: "u1",
+    updatedAt: "2026-09-11T03:10:00.000Z",
+    submittedAt: "2026-09-10T08:05:00.000Z",
+    decidedAt: "2026-09-11T03:10:00.000Z",
+    decidedBy: "u2",
+    startedAt: null,
+    completedAt: null,
+    cancelRequestedAt: null,
+    cancelRequestedBy: null,
+    cancelDecidedAt: null,
+    cancelDecidedBy: null,
+  };
+  const p2 = {
+    id: "PL-0002",
+    itemCode: "IS-002",
+    operatorId: "u3",
+    reviewerId: "u1",
+    stationId: "ST-02",
+    start: "2026-09-21T06:00:00.000Z",
+    end: "2026-09-21T07:00:00.000Z",
+    params: { paper: "云母宣", waterDrops: 16, grindMinutes: 30, pressure: "轻力", targetScore: 80, note: "" },
+    status: "pending",
+    reason: "",
+    result: "",
+    cancelReason: "",
+    createdAt: "2026-09-12T09:00:00.000Z",
+    createdBy: "u3",
+    updatedAt: "2026-09-12T09:00:00.000Z",
+    submittedAt: "2026-09-12T09:00:00.000Z",
+    decidedAt: null,
+    decidedBy: null,
+    startedAt: null,
+    completedAt: null,
+    cancelRequestedAt: null,
+    cancelRequestedBy: null,
+    cancelDecidedAt: null,
+    cancelDecidedBy: null,
+  };
+  db.plans.push(p1, p2);
+  db.occupancy.push(
+    { planId: p1.id, itemCode: p1.itemCode, stationId: p1.stationId, start: p1.start, end: p1.end },
+    { planId: p2.id, itemCode: p2.itemCode, stationId: p2.stationId, start: p2.start, end: p2.end },
+  );
+
+  let seq = 0;
+  for (const [plan, actions] of [
+    [p1, [
+      { ts: p1.createdAt, action: "plan_created", actorId: "u1", detail: { snapshot: "seed" } },
+      { ts: p1.submittedAt, action: "plan_submitted", actorId: "u1", detail: {} },
+      { ts: p1.decidedAt, action: "review_approved", actorId: "u2", detail: {} },
+    ]],
+    [p2, [
+      { ts: p2.createdAt, action: "plan_created", actorId: "u3", detail: { snapshot: "seed" } },
+      { ts: p2.submittedAt, action: "plan_submitted", actorId: "u3", detail: { resubmit: false } },
+    ]],
+  ]) {
+    for (const a of actions) append({ seq: ++seq, ts: a.ts, planId: plan.id, action: a.action, actorId: a.actorId, detail: a.detail });
+  }
+  return db;
+}
+
+/* ------------------------------------------------------------------ */
+/* 原子存储：单进程写互斥 + 临时文件 fsync + rename 提交                */
+/* ------------------------------------------------------------------ */
+
+let cache = null;
+let queueTail = Promise.resolve();
+let tmpCounter = 0;
+
+function withLock() {
+  const prev = queueTail;
+  let release;
+  queueTail = new Promise((resolve) => { release = resolve; });
+  return prev.then(() => release);
+}
+
+async function initDb() {
   if (!existsSync(dbPath)) {
     await mkdir(dirname(dbPath), { recursive: true });
-    await writeFile(dbPath, JSON.stringify(seed, null, 2));
+    await persist(buildSeed());
   }
-  return JSON.parse(await readFile(dbPath, "utf8"));
+  cache = JSON.parse(await readFile(dbPath, "utf8"));
+  if (!cache.version || cache.version < 2) {
+    cache = buildSeed();
+    await persist(cache);
+  }
+  cache.metrics ||= { conflictRejects: 0 };
 }
-async function saveDb(db) { await writeFile(dbPath, JSON.stringify(db, null, 2)); }
-async function body(req) {
+
+async function persist(db) {
+  const tmp = `${dbPath}.tmp.${process.pid}.${tmpCounter++}`;
+  const fh = await open(tmp, "wx");
+  try {
+    await fh.writeFile(JSON.stringify(db, null, 2), "utf8");
+    await fh.sync(); // 落盘后再 rename，保证崩溃也不会出现半文件
+  } finally {
+    await fh.close();
+  }
+  await rename(tmp, dbPath); // 同目录原子替换
+}
+
+/**
+ * 在写锁内执行：深拷贝快照 → 业务变更（抛错即整体丢弃）→ 原子落盘 → 提交内存态。
+ * 任何失败路径都不会写入状态、审计或占用。
+ */
+async function mutate(fn) {
+  const release = await withLock();
+  try {
+    const db = structuredClone(cache);
+    const out = fn(db);
+    await persist(db);
+    cache = db;
+    return out;
+  } finally {
+    release();
+  }
+}
+
+const readDb = () => cache;
+
+/* ------------------------------------------------------------------ */
+/* 审计链（仅追加，sha256 哈希链）                                     */
+/* ------------------------------------------------------------------ */
+
+function appendEvent(db, { planId = null, action, actorId, detail = {} }) {
+  const seq = db.events.length + 1;
+  const ts = new Date().toISOString();
+  const prevHash = db.events.length ? db.events[db.events.length - 1].hash : "0".repeat(64);
+  const e = { seq, ts, planId, action, actorId, detail, prevHash };
+  e.hash = sha256([seq, ts, planId, action, actorId, JSON.stringify(detail), prevHash].join("|"));
+  db.events.push(e);
+  return e;
+}
+
+export function verifyChain(events) {
+  let prevHash = "0".repeat(64);
+  for (let idx = 0; idx < events.length; idx++) {
+    const e = events[idx];
+    const expect = sha256([e.seq, e.ts, e.planId, e.action, e.actorId, JSON.stringify(e.detail), prevHash].join("|"));
+    if (e.seq !== idx + 1 || e.prevHash !== prevHash || e.hash !== expect) return false;
+    prevHash = e.hash;
+  }
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* 领域规则                                                            */
+/* ------------------------------------------------------------------ */
+
+const overlap = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && aEnd > bStart;
+
+/** 返回与给定占用需求冲突的占用行（墨锭并行占用 或 同台位时段重叠）。 */
+function findConflicts(db, { itemCode, stationId, start, end }, excludePlanId = null) {
+  const s = Date.parse(start);
+  const e = Date.parse(end);
+  const conflicts = [];
+  for (const occ of db.occupancy) {
+    if (occ.planId === excludePlanId) continue;
+    if (!overlap(s, e, Date.parse(occ.start), Date.parse(occ.end))) continue;
+    const plan = db.plans.find((p) => p.id === occ.planId);
+    if (occ.itemCode === itemCode || occ.stationId === stationId) {
+      conflicts.push({
+        planId: occ.planId,
+        reason: occ.itemCode === itemCode ? "item_busy" : "station_busy",
+        itemCode: occ.itemCode,
+        stationId: occ.stationId,
+        start: occ.start,
+        end: occ.end,
+        status: plan ? plan.status : null,
+      });
+    }
+  }
+  return conflicts;
+}
+
+function requireUser(db, actorId) {
+  const user = db.users.find((u) => u.id === actorId);
+  if (!user) throw new HttpError(401, "unauthorized");
+  return user;
+}
+const isAdmin = (db, userId) => db.users.find((u) => u.id === userId)?.role === "管理员";
+
+function parsePlanInput(db, input) {
+  const str = (v) => (v == null ? "" : String(v).trim());
+  const itemCode = str(input.itemCode);
+  const operatorId = str(input.operatorId);
+  const reviewerId = str(input.reviewerId);
+  const stationId = str(input.stationId);
+  const start = str(input.start);
+  const end = str(input.end);
+  if (!itemCode || !db.items.some((i) => i.code === itemCode)) throw new HttpError(400, "bad_item");
+  if (!operatorId || !db.users.some((u) => u.id === operatorId)) throw new HttpError(400, "bad_operator");
+  if (!stationId || !db.stations.some((s) => s.id === stationId)) throw new HttpError(400, "bad_station");
+  const s = Date.parse(start);
+  const t = Date.parse(end);
+  if (Number.isNaN(s) || Number.isNaN(t)) throw new HttpError(400, "bad_time");
+  if (t <= s) throw new HttpError(400, "end_before_start");
+  const params = {
+    paper: str(input.params?.paper),
+    waterDrops: Number(input.params?.waterDrops) || 0,
+    grindMinutes: Number(input.params?.grindMinutes) || 0,
+    pressure: str(input.params?.pressure),
+    targetScore: Number(input.params?.targetScore) || 0,
+    note: str(input.params?.note),
+  };
+  return { itemCode, operatorId, reviewerId, stationId, start: new Date(s).toISOString(), end: new Date(t).toISOString(), params };
+}
+
+function planView(db, p) {
+  const user = (id) => db.users.find((u) => u.id === id) || null;
+  return {
+    ...p,
+    operator: user(p.operatorId),
+    reviewer: user(p.reviewerId),
+    station: db.stations.find((s) => s.id === p.stationId) || null,
+    item: db.items.find((i) => i.code === p.itemCode) || null,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 命令处理（全部在 mutate 内，失败整体回滚）                          */
+/* ------------------------------------------------------------------ */
+
+function cmdCreatePlan(db, input, actorId) {
+  requireUser(db, actorId);
+  const fields = parsePlanInput(db, input);
+  const wantSubmit = Boolean(input.submit);
+
+  if (wantSubmit) {
+    if (!fields.reviewerId || !db.users.some((u) => u.id === fields.reviewerId)) throw new HttpError(400, "bad_reviewer");
+    if (fields.reviewerId === fields.operatorId) throw new HttpError(400, "reviewer_is_operator");
+  }
+
+  const id = `PL-${String(++db.seq).padStart(4, "0")}`;
+  const now = new Date().toISOString();
+  const plan = {
+    id,
+    ...fields,
+    reviewerId: fields.reviewerId || "",
+    status: wantSubmit ? "pending" : "draft",
+    reason: "",
+    result: "",
+    cancelReason: "",
+    createdAt: now,
+    createdBy: actorId,
+    updatedAt: now,
+    submittedAt: null,
+    decidedAt: null,
+    decidedBy: null,
+    startedAt: null,
+    completedAt: null,
+    cancelRequestedAt: null,
+    cancelRequestedBy: null,
+    cancelDecidedAt: null,
+    cancelDecidedBy: null,
+  };
+
+  if (wantSubmit) {
+    // 冲突检测与占用写入在同一事务内：并发下只有一个事务能走到这里
+    const conflicts = findConflicts(db, fields);
+    if (conflicts.length) {
+      db.metrics.conflictRejects += 1; // 与“拒绝”一起原子落盘的只有计数器，不含任何计划/审计/占用
+      return { rejected: true, conflicts };
+    }
+    db.occupancy.push({ planId: id, itemCode: fields.itemCode, stationId: fields.stationId, start: fields.start, end: fields.end });
+    plan.submittedAt = now;
+  }
+
+  db.plans.push(plan);
+  appendEvent(db, { planId: id, action: "plan_created", actorId, detail: { by: actorId, submit: wantSubmit } });
+  if (wantSubmit) appendEvent(db, { planId: id, action: "plan_submitted", actorId, detail: { resubmit: false } });
+  return { rejected: false, plan };
+}
+
+function cmdUpdateDraft(db, id, input, actorId) {
+  requireUser(db, actorId);
+  const plan = db.plans.find((p) => p.id === id);
+  if (!plan) throw new HttpError(404, "plan_not_found");
+  if (!["draft", "rejected"].includes(plan.status)) throw new HttpError(409, "not_editable");
+  if (plan.operatorId !== actorId && !isAdmin(db, actorId)) throw new HttpError(403, "forbidden");
+  const fields = parsePlanInput(db, { ...plan, ...input, params: { ...plan.params, ...(input.params || {}) } });
+  if (fields.reviewerId && !db.users.some((u) => u.id === fields.reviewerId)) throw new HttpError(400, "bad_reviewer");
+  if (fields.reviewerId && fields.reviewerId === fields.operatorId) throw new HttpError(400, "reviewer_is_operator");
+  Object.assign(plan, fields);
+  if (input.reviewerId !== undefined) plan.reviewerId = fields.reviewerId;
+  plan.updatedAt = new Date().toISOString();
+  appendEvent(db, { planId: id, action: "plan_edited", actorId, detail: { fields } });
+  return { plan };
+}
+
+function cmdSubmit(db, id, actorId) {
+  requireUser(db, actorId);
+  const plan = db.plans.find((p) => p.id === id);
+  if (!plan) throw new HttpError(404, "plan_not_found");
+  if (!["draft", "rejected"].includes(plan.status)) throw new HttpError(409, "not_submittable");
+  if (plan.operatorId !== actorId && !isAdmin(db, actorId)) throw new HttpError(403, "forbidden");
+  if (!plan.reviewerId) throw new HttpError(400, "reviewer_required");
+  if (plan.reviewerId === plan.operatorId) throw new HttpError(400, "reviewer_is_operator");
+
+  const wasRejected = plan.status === "rejected";
+  const conflicts = findConflicts(db, plan);
+  if (conflicts.length) {
+    db.metrics.conflictRejects += 1;
+    return { rejected: true, conflicts };
+  }
+  const now = new Date().toISOString();
+  plan.status = "pending";
+  plan.reason = "";
+  plan.submittedAt = now;
+  plan.decidedAt = null;
+  plan.decidedBy = null;
+  plan.updatedAt = now;
+  db.occupancy.push({ planId: plan.id, itemCode: plan.itemCode, stationId: plan.stationId, start: plan.start, end: plan.end });
+  appendEvent(db, { planId: id, action: "plan_submitted", actorId, detail: { resubmit: wasRejected } });
+  return { rejected: false, plan };
+}
+
+function cmdReview(db, id, body, actorId) {
+  requireUser(db, actorId);
+  const plan = db.plans.find((p) => p.id === id);
+  if (!plan) throw new HttpError(404, "plan_not_found");
+  if (plan.status !== "pending") throw new HttpError(409, "not_pending");
+  // 任何人都不能审核自己操作的计划（优先于指派校验，返回明确错误码）
+  if (plan.operatorId === actorId) throw new HttpError(403, "reviewer_is_operator");
+  // 审核人必须是指派复核人或管理员
+  if (plan.reviewerId !== actorId && !isAdmin(db, actorId)) throw new HttpError(403, "forbidden");
+
+  const decision = String(body.decision || "");
+  const reason = String(body.reason || "").trim();
+  if (!["approved", "rejected"].includes(decision)) throw new HttpError(400, "bad_decision");
+  if (decision === "rejected" && !reason) throw new HttpError(400, "reason_required");
+
+  const now = new Date().toISOString();
+  plan.decidedAt = now;
+  plan.decidedBy = actorId;
+  plan.updatedAt = now;
+  if (decision === "approved") {
+    plan.status = "approved";
+    appendEvent(db, { planId: id, action: "review_approved", actorId, detail: {} });
+  } else {
+    plan.status = "rejected";
+    plan.reason = reason;
+    // 驳回释放预占，供其他计划使用
+    db.occupancy = db.occupancy.filter((o) => o.planId !== id);
+    appendEvent(db, { planId: id, action: "review_rejected", actorId, detail: { reason } });
+  }
+  return { plan };
+}
+
+function cmdStart(db, id, actorId) {
+  requireUser(db, actorId);
+  const plan = db.plans.find((p) => p.id === id);
+  if (!plan) throw new HttpError(404, "plan_not_found");
+  if (plan.status !== "approved") throw new HttpError(409, "not_approved");
+  if (plan.operatorId !== actorId && !isAdmin(db, actorId)) throw new HttpError(403, "forbidden");
+  const now = new Date().toISOString();
+  plan.status = "running";
+  plan.startedAt = now;
+  plan.updatedAt = now;
+  appendEvent(db, { planId: id, action: "plan_started", actorId, detail: {} });
+  return { plan };
+}
+
+function cmdComplete(db, id, body, actorId) {
+  requireUser(db, actorId);
+  const plan = db.plans.find((p) => p.id === id);
+  if (!plan) throw new HttpError(404, "plan_not_found");
+  if (plan.status !== "running") throw new HttpError(409, "not_running");
+  if (plan.operatorId !== actorId && !isAdmin(db, actorId)) throw new HttpError(403, "forbidden");
+  const now = new Date().toISOString();
+  plan.status = "completed";
+  plan.result = String(body.result || "").trim();
+  plan.completedAt = now;
+  plan.updatedAt = now;
+  db.occupancy = db.occupancy.filter((o) => o.planId !== id);
+  appendEvent(db, { planId: id, action: "plan_completed", actorId, detail: { result: plan.result } });
+  return { plan };
+}
+
+function cmdCancelRequest(db, id, body, actorId) {
+  requireUser(db, actorId);
+  const plan = db.plans.find((p) => p.id === id);
+  if (!plan) throw new HttpError(404, "plan_not_found");
+  if (!["approved", "running"].includes(plan.status)) throw new HttpError(409, "not_cancellable");
+  if (plan.operatorId !== actorId && !isAdmin(db, actorId)) throw new HttpError(403, "forbidden");
+  const reason = String(body.reason || "").trim();
+  if (!reason) throw new HttpError(400, "reason_required");
+
+  const now = new Date().toISOString();
+  plan.cancelReason = reason;
+  plan.cancelRequestedAt = now;
+  plan.cancelRequestedBy = actorId;
+  plan.updatedAt = now;
+  appendEvent(db, { planId: id, action: "cancel_requested", actorId, detail: { reason, phase: plan.status } });
+
+  if (plan.status === "approved") {
+    // 未开始：登记即取消，释放占用
+    plan.status = "cancelled";
+    plan.cancelDecidedAt = now;
+    plan.cancelDecidedBy = actorId;
+    db.occupancy = db.occupancy.filter((o) => o.planId !== id);
+    appendEvent(db, { planId: id, action: "cancel_confirmed", actorId, detail: { beforeStart: true } });
+  } else {
+    // 已开始：进入第二人复核
+    plan.status = "cancel_review";
+  }
+  return { plan };
+}
+
+function cmdCancelReview(db, id, body, actorId) {
+  requireUser(db, actorId);
+  const plan = db.plans.find((p) => p.id === id);
+  if (!plan) throw new HttpError(404, "plan_not_found");
+  if (plan.status !== "cancel_review") throw new HttpError(409, "not_in_cancel_review");
+  // 双人复核：复核人不能是取消申请人本人
+  if (plan.cancelRequestedBy === actorId) throw new HttpError(403, "reviewer_is_requester");
+  if (plan.reviewerId !== actorId && !isAdmin(db, actorId)) throw new HttpError(403, "forbidden");
+
+  const decision = String(body.decision || "");
+  const reason = String(body.reason || "").trim();
+  if (!["confirmed", "rejected"].includes(decision)) throw new HttpError(400, "bad_decision");
+  if (decision === "rejected" && !reason) throw new HttpError(400, "reason_required");
+
+  const now = new Date().toISOString();
+  plan.cancelDecidedAt = now;
+  plan.cancelDecidedBy = actorId;
+  plan.updatedAt = now;
+  if (decision === "confirmed") {
+    plan.status = "cancelled";
+    db.occupancy = db.occupancy.filter((o) => o.planId !== id);
+    appendEvent(db, { planId: id, action: "cancel_confirmed", actorId, detail: {} });
+  } else {
+    plan.status = "running";
+    appendEvent(db, { planId: id, action: "cancel_rejected", actorId, detail: { reason } });
+  }
+  return { plan };
+}
+
+function cmdDeleteDraft(db, id, actorId) {
+  requireUser(db, actorId);
+  const plan = db.plans.find((p) => p.id === id);
+  if (!plan) throw new HttpError(404, "plan_not_found");
+  if (plan.status !== "draft") throw new HttpError(409, "only_draft_deletable");
+  if (plan.operatorId !== actorId && !isAdmin(db, actorId)) throw new HttpError(403, "forbidden");
+  db.plans = db.plans.filter((p) => p.id !== id);
+  db.occupancy = db.occupancy.filter((o) => o.planId !== id);
+  appendEvent(db, { planId: id, action: "plan_deleted", actorId, detail: {} });
+  return { ok: true };
+}
+
+function cmdCreateItem(db, input, actorId) {
+  requireUser(db, actorId);
+  const code = String(input.code || "").trim();
+  if (!code) throw new HttpError(400, "code_required");
+  if (db.items.some((i) => i.code === code)) throw new HttpError(409, "item_exists");
+  const item = {
+    code,
+    smokeSource: String(input.smokeSource || "").trim(),
+    glueRatio: String(input.glueRatio || "").trim(),
+    ageYears: Number(input.ageYears) || 0,
+    storage: String(input.storage || "").trim(),
+  };
+  db.items.push(item);
+  appendEvent(db, { action: "item_created", actorId, detail: { code } });
+  return { item };
+}
+
+/* ------------------------------------------------------------------ */
+/* 看板汇总                                                            */
+/* ------------------------------------------------------------------ */
+
+function buildBootstrap(db) {
+  const now = Date.now();
+  const occIndex = new Map(db.occupancy.map((o) => [o.planId, o]));
+
+  // 活跃计划之间的成对冲突（正常情况下应恒为 0，用于看板醒目提示）
+  const conflictPairs = [];
+  const active = db.plans.filter((p) => ACTIVE_STATUSES.includes(p.status));
+  for (let i = 0; i < active.length; i++) {
+    for (let j = i + 1; j < active.length; j++) {
+      const a = occIndex.get(active[i].id);
+      const b = occIndex.get(active[j].id);
+      if (!a || !b) continue;
+      if (overlap(Date.parse(a.start), Date.parse(a.end), Date.parse(b.start), Date.parse(b.end)) &&
+          (a.itemCode === b.itemCode || a.stationId === b.stationId)) {
+        conflictPairs.push([a.planId, b.planId]);
+      }
+    }
+  }
+  const conflictPlanIds = new Set(conflictPairs.flat());
+  const overdue = active
+    .filter((p) => Date.parse(p.end) < now)
+    .map((p) => ({ id: p.id, kind: p.status === "running" ? "overdue_running" : "overdue_not_started", end: p.end }));
+
+  const statusCounts = Object.fromEntries(STATUSES.map((s) => [s, 0]));
+  for (const p of db.plans) statusCounts[p.status] += 1;
+
+  return {
+    serverTime: new Date(now).toISOString(),
+    users: db.users,
+    stations: db.stations,
+    items: db.items,
+    plans: db.plans.map((p) => planView(db, p)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    occupancy: db.occupancy,
+    stats: {
+      statusCounts,
+      activeConflicts: conflictPairs.length,
+      conflictPlanCount: conflictPlanIds.size,
+      conflictRejects: db.metrics.conflictRejects,
+      overdueCount: overdue.length,
+      overdue,
+    },
+    chainValid: verifyChain(db.events),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* HTTP                                                                */
+/* ------------------------------------------------------------------ */
+
+async function readBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
-  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
-}
-function send(res, status, data) {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(data, null, 2));
-}
-function html(res, text) {
-  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-  res.end(text);
-}
-function newId() { return "IS-" + Date.now(); }
-function computeStats(items) {
-  const stats = Object.fromEntries(statLabels.map(label => [label, 0]));
-  for (const item of items) {
-    if (stats[item.status] !== undefined) stats[item.status] += 1;
+  if (!chunks.length) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new HttpError(400, "bad_json");
   }
-  return stats;
 }
-function summarize(item) {
-  const logCount = (item.logs || []).length + (item.tasks || []).reduce((n, t) => n + (t.logs || []).length, 0);
-  return { ...item, logCount };
-}
-function page() {
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>墨锭试磨室</title>
-  <style>
-    :root { --bg:#f1f3ef; --panel:#fff; --ink:#20241f; --muted:#687066; --line:#d4ddd0; --accent:#526f43; --warn:#9b4937; }
-    * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--ink); font-family:Arial,"PingFang SC",sans-serif; }
-    header { padding:22px 28px; background:#fff; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; gap:16px; align-items:center; }
-    h1 { margin:0; font-size:26px; } h2 { margin:0 0 12px; font-size:18px; } main { display:grid; grid-template-columns:380px 1fr; gap:22px; padding:22px 28px; }
-    form,.panel,.card,.stat { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; }
-    label { display:block; margin:10px 0 5px; color:var(--muted); font-size:13px; } input,select,textarea { width:100%; border:1px solid var(--line); border-radius:6px; padding:9px; font:inherit; background:#fff; } textarea { min-height:68px; }
-    button { border:0; border-radius:6px; background:var(--accent); color:#fff; padding:10px 13px; font-weight:700; cursor:pointer; } button.secondary { background:#69736a; }
-    .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-bottom:14px; } .stat strong { display:block; font-size:24px; }
-    .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; } .toolbar select,.toolbar input { width:auto; min-width:160px; }
-    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; } .card { display:grid; gap:8px; }
-    .meta { color:var(--muted); font-size:13px; } .pill { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:3px 8px; font-size:12px; }
-    .logs { border-top:1px solid var(--line); padding-top:8px; max-height:90px; overflow:auto; } .warn { color:var(--warn); font-weight:700; }
-    @media (max-width:900px){ header{display:block;padding:18px 16px;} main{grid-template-columns:1fr;padding:16px;} }
-  </style>
-</head>
-<body>
-  <header><div><h1>墨锭试磨室</h1><div class="meta">墨锭建档、试磨记录和评分统计</div></div><button id="reload">刷新</button></header>
-  <main>
-    <section>
-      <form id="createForm"><h2>新增墨锭</h2><div id="fields"></div><label>初始状态</label><select name="status">${stages.map(s => '<option>'+s+'</option>').join('')}</select><button>保存墨锭</button></form>
-      <form id="actionForm" style="margin-top:14px"><h2>创建试磨记录</h2><label>选择墨锭</label><select name="id" id="itemSelect"></select><div id="extraFields"></div><button>提交记录</button></form>
-    </section>
-    <section>
-      <div class="stats" id="stats"></div>
-      <div class="toolbar"><select id="statusFilter"><option value="">全部状态</option>${stages.map(s => '<option>'+s+'</option>').join('')}</select><input id="search" placeholder="搜索编号或关键词"></div>
-      <div class="panel"><h2>选择墨锭后录入试磨记录，系统会保留多次试磨结果并更新评分状态。</h2><div class="grid" id="cards"></div></div>
-    </section>
-  </main>
-  <script>
-    const fields = [["code","墨锭编号","text"],["smokeSource","烟料来源","text"],["glueRatio","胶料比例","text"],["ageYears","存放年限","number"],["storage","存放位置","text"]];
-    const stages = ["待试磨","已试磨","重点观察"];
-    const extraFields = [["paper","试磨纸张"],["water","加水量"],["speed","出墨速度"],["colorLayer","墨色层次"],["sediment","沉淀情况"],["score","评分"]];
-    const createForm = document.querySelector('#createForm');
-    const actionForm = document.querySelector('#actionForm');
-    const cards = document.querySelector('#cards');
-    const statsEl = document.querySelector('#stats');
-    const itemSelect = document.querySelector('#itemSelect');
-    let items = [];
-    async function api(path, options) {
-      const res = await fetch(path, options && options.body ? { ...options, headers:{ 'Content-Type':'application/json' } } : options);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '请求失败');
-      return data;
-    }
-    function renderForms() {
-      document.querySelector('#fields').innerHTML = fields.map(([key,label,type]) => '<label>'+label+'</label><input name="'+key+'" type="'+type+'" '+(key==='code'?'required':'')+'>').join('');
-      document.querySelector('#extraFields').innerHTML = extraFields.map(([key,label]) => '<label>'+label+'</label><input name="'+key+'">').join('');
-    }
-    function render() {
-      itemSelect.innerHTML = items.map(item => '<option value="'+(item.id || item.code)+'">'+(item.code || item.id)+' · '+(item.name || item.shipType || item.source || item.plateSize || '')+'</option>').join('');
-      const stats = Object.fromEntries(stages.map(s => [s, items.filter(i => i.status === s).length]));
-      statsEl.innerHTML = Object.entries(stats).map(([k,v]) => '<div class="stat"><span>'+k+'</span><strong>'+v+'</strong></div>').join('');
-      const status = document.querySelector('#statusFilter').value;
-      const q = document.querySelector('#search').value.trim();
-      const visible = items.filter(item => (!status || item.status === status) && (!q || JSON.stringify(item).includes(q)));
-      cards.innerHTML = visible.map(item => cardHtml(item)).join('');
-      document.querySelectorAll('[data-status]').forEach(sel => sel.onchange = async () => { await api('/api/items/'+sel.dataset.status, { method:'PATCH', body: JSON.stringify({ status: sel.value }) }); await load(); });
-      document.querySelectorAll('[data-note]').forEach(btn => btn.onclick = async () => { const id = btn.dataset.note; const note = prompt('记录备注'); if (note) { await api('/api/items/'+id+'/logs', { method:'POST', body: JSON.stringify({ step:'备注', note }) }); await load(); } });
-    }
-    function cardHtml(item) {
-      const main = fields.slice(0,4).map(([key,label]) => '<div><b>'+label+'</b> '+(item[key] ?? '')+'</div>').join('');
-      const tasks = (item.tasks || []).map(t => '<div class="meta">任务 '+t.position+' · '+t.status+' · '+t.tension+'</div>').join('');
-      const logs = (item.logs || []).slice(-4).map(l => '<div>'+l.step+'：'+l.note+'</div>').join('');
-      return '<article class="card"><h3>'+(item.code || item.id)+'</h3><span class="pill">'+item.status+'</span>'+main+tasks+'<label>状态</label><select data-status="'+(item.id || item.code)+'">'+stages.map(s => '<option '+(s===item.status?'selected':'')+'>'+s+'</option>').join('')+'</select><button class="secondary" data-note="'+(item.id || item.code)+'">追加备注</button><div class="logs meta">'+(logs || '暂无记录')+'</div></article>';
-    }
-    async function load() { items = await api('/api/items'); render(); }
-    createForm.onsubmit = async event => { event.preventDefault(); await api('/api/items', { method:'POST', body: JSON.stringify(Object.fromEntries(new FormData(createForm).entries())) }); createForm.reset(); await load(); };
-    actionForm.onsubmit = async event => { event.preventDefault(); await api('/api/items/'+itemSelect.value+'/action', { method:'POST', body: JSON.stringify(Object.fromEntries(new FormData(actionForm).entries())) }); actionForm.reset(); await load(); };
-    document.querySelector('#statusFilter').onchange = render; document.querySelector('#search').oninput = render; document.querySelector('#reload').onclick = load;
-    renderForms(); load();
-  </script>
-</body>
-</html>`;
+function sendJson(res, status, data) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(JSON.stringify(data));
 }
 
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    const db = await loadDb();
-    if (req.method === "GET" && url.pathname === "/") return html(res, page());
-    if (req.method === "GET" && url.pathname === "/api/items") return send(res, 200, db.items.map(summarize));
+    const actorId = String(req.headers["x-user-id"] || "").trim();
+
+    if (req.method === "GET" && url.pathname === "/") {
+      const page = await readFile(join(__dirname, "public", "index.html"), "utf8");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(page);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/bootstrap") {
+      return sendJson(res, 200, buildBootstrap(readDb()));
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/events") {
+      const planId = url.searchParams.get("planId");
+      const events = planId ? readDb().events.filter((e) => e.planId === planId) : readDb().events;
+      return sendJson(res, 200, { events, chainValid: verifyChain(events) });
+    }
+
     if (req.method === "POST" && url.pathname === "/api/items") {
-      const input = await body(req);
-      const item = { id: newId(), ...input, logs: [{ at: new Date().toISOString(), step: "建档", note: "创建墨锭" }] };
-      
-      db.items.unshift(item);
-      await saveDb(db);
-      return send(res, 201, item);
+      const body = await readBody(req);
+      const out = await mutate((db) => cmdCreateItem(db, body, actorId));
+      return sendJson(res, 201, out);
     }
-    const patch = url.pathname.match(/^\/api\/items\/([^/]+)$/);
-    if (patch && req.method === "PATCH") {
-      const item = db.items.find(x => x.id === patch[1] || x.code === patch[1]);
-      if (!item) return send(res, 404, { error: "item_not_found" });
-      Object.assign(item, await body(req));
-      item.logs ||= [];
-      item.logs.push({ at: new Date().toISOString(), step: "状态", note: "更新为" + item.status });
-      await saveDb(db);
-      return send(res, 200, item);
+
+    if (req.method === "POST" && url.pathname === "/api/plans") {
+      const body = await readBody(req);
+      const out = await mutate((db) => cmdCreatePlan(db, body, actorId));
+      if (out.rejected) return sendJson(res, 409, { error: "conflict", conflicts: out.conflicts });
+      return sendJson(res, 201, { plan: planView(readDb(), out.plan) });
     }
-    const log = url.pathname.match(/^\/api\/items\/([^/]+)\/logs$/);
-    if (log && req.method === "POST") {
-      const item = db.items.find(x => x.id === log[1] || x.code === log[1]);
-      if (!item) return send(res, 404, { error: "item_not_found" });
-      const input = await body(req);
-      item.logs ||= [];
-      item.logs.push({ at: new Date().toISOString(), step: input.step || "记录", note: input.note || "" });
-      await saveDb(db);
-      return send(res, 201, item);
+
+    const planRoute = url.pathname.match(/^\/api\/plans\/([^/]+)(\/([a-z-]+))?$/);
+    if (planRoute) {
+      const id = decodeURIComponent(planRoute[1]);
+      const action = planRoute[3] || "";
+      const body = ["POST", "PATCH", "DELETE"].includes(req.method) ? await readBody(req) : {};
+
+      if (req.method === "PATCH" && action === "") {
+        const out = await mutate((db) => cmdUpdateDraft(db, id, body, actorId));
+        return sendJson(res, 200, { plan: planView(readDb(), out.plan) });
+      }
+      if (req.method === "DELETE" && action === "") {
+        await mutate((db) => cmdDeleteDraft(db, id, actorId));
+        return sendJson(res, 200, { ok: true });
+      }
+      if (req.method !== "POST") throw new HttpError(404, "not_found");
+
+      const out = await mutate((db) => {
+        switch (action) {
+          case "submit": return cmdSubmit(db, id, actorId);
+          case "review": return cmdReview(db, id, body, actorId);
+          case "start": return cmdStart(db, id, actorId);
+          case "complete": return cmdComplete(db, id, body, actorId);
+          case "cancel-request": return cmdCancelRequest(db, id, body, actorId);
+          case "cancel-review": return cmdCancelReview(db, id, body, actorId);
+          default: throw new HttpError(404, "not_found");
+        }
+      });
+      if (out && out.rejected) return sendJson(res, 409, { error: "conflict", conflicts: out.conflicts });
+      return sendJson(res, 200, { plan: planView(readDb(), out.plan) });
     }
-    const action = url.pathname.match(/^\/api\/items\/([^/]+)\/action$/);
-    if (action && req.method === "POST") {
-      const item = db.items.find(x => x.id === action[1] || x.code === action[1]);
-      if (!item) return send(res, 404, { error: "item_not_found" });
-      const input = await body(req);
-      item.logs ||= [];
-      const score = Number(input.score || 0);
-      item.tests ||= [];
-      item.tests.push({ at: new Date().toISOString(), ...input, score });
-      item.status = score >= 85 ? "已试磨" : "重点观察";
-      item.logs.push({ at: new Date().toISOString(), step: "试磨", note: (input.paper || "试纸") + "，评分" + score, score });
-      await saveDb(db);
-      return send(res, 201, item);
-    }
-    if (req.method === "GET" && url.pathname === "/api/stats") return send(res, 200, computeStats(db.items));
-    send(res, 404, { error: "not_found" });
+
+    sendJson(res, 404, { error: "not_found" });
   } catch (error) {
-    send(res, 500, { error: error.message });
+    if (error instanceof HttpError) {
+      return sendJson(res, error.status, { error: error.code, details: error.details });
+    }
+    console.error(error);
+    sendJson(res, 500, { error: "internal", message: error.message });
   }
 });
-server.listen(port, () => console.log("墨锭试磨室 listening on http://localhost:" + port));
+
+initDb().then(() => {
+  server.listen(port, () => console.log(`墨锭试磨室 listening on http://localhost:${port} db=${dbPath}`));
+});

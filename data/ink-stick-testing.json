@@ -1,47 +1,208 @@
 {
+  "version": 2,
+  "seq": 2,
+  "metrics": {
+    "conflictRejects": 0
+  },
+  "users": [
+    {
+      "id": "u1",
+      "name": "墨雁",
+      "role": "试墨师"
+    },
+    {
+      "id": "u2",
+      "name": "青岫",
+      "role": "复核师"
+    },
+    {
+      "id": "u3",
+      "name": "松韵",
+      "role": "试墨师"
+    },
+    {
+      "id": "admin",
+      "name": "玄伯（室长）",
+      "role": "管理员"
+    }
+  ],
+  "stations": [
+    {
+      "id": "ST-01",
+      "name": "青玉案研台"
+    },
+    {
+      "id": "ST-02",
+      "name": "紫檀研台"
+    },
+    {
+      "id": "ST-03",
+      "name": "精研防尘台"
+    }
+  ],
   "items": [
     {
       "code": "IS-001",
       "smokeSource": "黄山松烟",
       "glueRatio": "7.5%",
       "ageYears": 8,
-      "storage": "恒湿柜B",
-      "status": "已试磨",
-      "logs": [
-        {
-          "at": "2026-06-11",
-          "step": "试磨",
-          "note": "宣纸20滴水，出墨快，评分86",
-          "score": 86
-        }
-      ]
+      "storage": "恒湿柜B"
     },
     {
       "code": "IS-002",
       "smokeSource": "桐油烟",
       "glueRatio": "8%",
       "ageYears": 3,
-      "storage": "试样盒C",
-      "status": "重点观察",
-      "logs": [
-        {
-          "at": "2026-06-21T03:50:28.907Z",
-          "step": "试磨",
-          "note": "棉连纸，评分79",
-          "score": 79
-        }
-      ],
-      "tests": [
-        {
-          "at": "2026-06-21T03:50:28.907Z",
-          "paper": "棉连纸",
-          "water": "18滴",
-          "speed": "中",
-          "colorLayer": "偏暖",
-          "sediment": "少",
-          "score": 79
-        }
-      ]
+      "storage": "试样盒C"
+    },
+    {
+      "code": "IS-003",
+      "smokeSource": "漆烟",
+      "glueRatio": "7%",
+      "ageYears": 12,
+      "storage": "恒湿柜A"
+    }
+  ],
+  "plans": [
+    {
+      "id": "PL-0001",
+      "itemCode": "IS-001",
+      "operatorId": "u1",
+      "reviewerId": "u2",
+      "stationId": "ST-01",
+      "start": "2026-09-20T01:00:00.000Z",
+      "end": "2026-09-20T02:30:00.000Z",
+      "params": {
+        "paper": "净皮宣纸",
+        "waterDrops": 20,
+        "grindMinutes": 40,
+        "pressure": "中力",
+        "targetScore": 85,
+        "note": "隔年陈墨先醒 5 分钟"
+      },
+      "status": "approved",
+      "reason": "",
+      "result": "",
+      "cancelReason": "",
+      "createdAt": "2026-09-10T08:00:00.000Z",
+      "createdBy": "u1",
+      "updatedAt": "2026-09-11T03:10:00.000Z",
+      "submittedAt": "2026-09-10T08:05:00.000Z",
+      "decidedAt": "2026-09-11T03:10:00.000Z",
+      "decidedBy": "u2",
+      "startedAt": null,
+      "completedAt": null,
+      "cancelRequestedAt": null,
+      "cancelRequestedBy": null,
+      "cancelDecidedAt": null,
+      "cancelDecidedBy": null
+    },
+    {
+      "id": "PL-0002",
+      "itemCode": "IS-002",
+      "operatorId": "u3",
+      "reviewerId": "u1",
+      "stationId": "ST-02",
+      "start": "2026-09-21T06:00:00.000Z",
+      "end": "2026-09-21T07:00:00.000Z",
+      "params": {
+        "paper": "云母宣",
+        "waterDrops": 16,
+        "grindMinutes": 30,
+        "pressure": "轻力",
+        "targetScore": 80,
+        "note": ""
+      },
+      "status": "pending",
+      "reason": "",
+      "result": "",
+      "cancelReason": "",
+      "createdAt": "2026-09-12T09:00:00.000Z",
+      "createdBy": "u3",
+      "updatedAt": "2026-09-12T09:00:00.000Z",
+      "submittedAt": "2026-09-12T09:00:00.000Z",
+      "decidedAt": null,
+      "decidedBy": null,
+      "startedAt": null,
+      "completedAt": null,
+      "cancelRequestedAt": null,
+      "cancelRequestedBy": null,
+      "cancelDecidedAt": null,
+      "cancelDecidedBy": null
+    }
+  ],
+  "occupancy": [
+    {
+      "planId": "PL-0001",
+      "itemCode": "IS-001",
+      "stationId": "ST-01",
+      "start": "2026-09-20T01:00:00.000Z",
+      "end": "2026-09-20T02:30:00.000Z"
+    },
+    {
+      "planId": "PL-0002",
+      "itemCode": "IS-002",
+      "stationId": "ST-02",
+      "start": "2026-09-21T06:00:00.000Z",
+      "end": "2026-09-21T07:00:00.000Z"
+    }
+  ],
+  "events": [
+    {
+      "seq": 1,
+      "ts": "2026-09-10T08:00:00.000Z",
+      "planId": "PL-0001",
+      "action": "plan_created",
+      "actorId": "u1",
+      "detail": {
+        "snapshot": "seed"
+      },
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "hash": "592642ce3a26d821ad18a5ff742a2fd43078db5d9e0c11bcb0958df53d2fb1c0"
+    },
+    {
+      "seq": 2,
+      "ts": "2026-09-10T08:05:00.000Z",
+      "planId": "PL-0001",
+      "action": "plan_submitted",
+      "actorId": "u1",
+      "detail": {},
+      "prevHash": "592642ce3a26d821ad18a5ff742a2fd43078db5d9e0c11bcb0958df53d2fb1c0",
+      "hash": "8c3aa536d79d113e7565fffc47950ebfca486ed2883e0a1f5f37da64698fcb81"
+    },
+    {
+      "seq": 3,
+      "ts": "2026-09-11T03:10:00.000Z",
+      "planId": "PL-0001",
+      "action": "review_approved",
+      "actorId": "u2",
+      "detail": {},
+      "prevHash": "8c3aa536d79d113e7565fffc47950ebfca486ed2883e0a1f5f37da64698fcb81",
+      "hash": "0a88799a340a64b026b64878bb2330f7a3f697db7e6350972dfb28c3677a64a7"
+    },
+    {
+      "seq": 4,
+      "ts": "2026-09-12T09:00:00.000Z",
+      "planId": "PL-0002",
+      "action": "plan_created",
+      "actorId": "u3",
+      "detail": {
+        "snapshot": "seed"
+      },
+      "prevHash": "0a88799a340a64b026b64878bb2330f7a3f697db7e6350972dfb28c3677a64a7",
+      "hash": "e07b486971887ea806afb0480c82aadbb4dac5e47298c0eab6b6ed8fa48f7814"
+    },
+    {
+      "seq": 5,
+      "ts": "2026-09-12T09:00:00.000Z",
+      "planId": "PL-0002",
+      "action": "plan_submitted",
+      "actorId": "u3",
+      "detail": {
+        "resubmit": false
+      },
+      "prevHash": "e07b486971887ea806afb0480c82aadbb4dac5e47298c0eab6b6ed8fa48f7814",
+      "hash": "16293480c5d376c23c0badcd6a3c5f0815864ae7a6d9997fc2dc8c007cd7feac"
     }
   ]
 }
