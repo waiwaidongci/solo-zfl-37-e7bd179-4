@@ -46,14 +46,27 @@
       "smokeSource": "黄山松烟",
       "glueRatio": "7.5%",
       "ageYears": 8,
-      "storage": "恒湿柜B"
+      "storage": "恒湿柜B",
+      "status": "已试磨",
+      "logs": [
+        {
+          "at": "2026-06-11",
+          "step": "试磨",
+          "note": "宣纸20滴水，出墨快，评分86",
+          "score": 86
+        }
+      ],
+      "tests": []
     },
     {
       "code": "IS-002",
       "smokeSource": "桐油烟",
       "glueRatio": "8%",
       "ageYears": 3,
-      "storage": "试样盒C"
+      "storage": "试样盒C",
+      "status": "待试磨",
+      "logs": [],
+      "tests": []
     },
     {
       "code": "IS-003",
@@ -150,6 +163,68 @@
   "events": [
     {
       "seq": 1,
+      "ts": "2026-01-01T00:00:00.000Z",
+      "planId": null,
+      "action": "item_imported",
+      "actorId": "system",
+      "detail": {
+        "code": "IS-001",
+        "smokeSource": "黄山松烟",
+        "glueRatio": "7.5%",
+        "status": "已试磨"
+      },
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "hash": "854782744c3a9f49b1b5d70d3dc041f219b75ec890e0c17e2d885a2420405690"
+    },
+    {
+      "seq": 2,
+      "ts": "2026-06-11T00:00:00.000Z",
+      "planId": null,
+      "action": "legacy_log",
+      "actorId": "system",
+      "detail": {
+        "itemCode": "IS-001",
+        "at": "2026-06-11",
+        "step": "试磨",
+        "note": "宣纸20滴水，出墨快，评分86",
+        "score": 86
+      },
+      "prevHash": "854782744c3a9f49b1b5d70d3dc041f219b75ec890e0c17e2d885a2420405690",
+      "hash": "1fdc8b856456b06561c0945c886911c1bdefd247f0fbad0f77bec730e2bdee57"
+    },
+    {
+      "seq": 3,
+      "ts": "2026-01-01T00:00:00.000Z",
+      "planId": null,
+      "action": "item_imported",
+      "actorId": "system",
+      "detail": {
+        "code": "IS-002",
+        "smokeSource": "桐油烟",
+        "glueRatio": "8%",
+        "status": "待试磨"
+      },
+      "prevHash": "1fdc8b856456b06561c0945c886911c1bdefd247f0fbad0f77bec730e2bdee57",
+      "hash": "2f5b84ec0fd1ee3179b101bb0c6015e113a411377797b4b14f675a9a0cf405a4"
+    },
+    {
+      "seq": 4,
+      "ts": "2026-09-13T00:00:00.000Z",
+      "planId": null,
+      "action": "schema_migrated",
+      "actorId": "system",
+      "detail": {
+        "fromVersion": 1,
+        "toVersion": 2,
+        "itemsImported": 2,
+        "legacyLogs": 1,
+        "legacyTests": 0
+      },
+      "prevHash": "2f5b84ec0fd1ee3179b101bb0c6015e113a411377797b4b14f675a9a0cf405a4",
+      "hash": "25485fa5ba249a864030dea268fda91868648778477de5f0eb07414e18537378"
+    },
+    {
+      "seq": 5,
       "ts": "2026-09-10T08:00:00.000Z",
       "planId": "PL-0001",
       "action": "plan_created",
@@ -157,31 +232,31 @@
       "detail": {
         "snapshot": "seed"
       },
-      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
-      "hash": "592642ce3a26d821ad18a5ff742a2fd43078db5d9e0c11bcb0958df53d2fb1c0"
+      "prevHash": "25485fa5ba249a864030dea268fda91868648778477de5f0eb07414e18537378",
+      "hash": "660b680122a6bb24e5f0040d6dfc60230fa0d7aace15ce2608522474f597d599"
     },
     {
-      "seq": 2,
+      "seq": 6,
       "ts": "2026-09-10T08:05:00.000Z",
       "planId": "PL-0001",
       "action": "plan_submitted",
       "actorId": "u1",
       "detail": {},
-      "prevHash": "592642ce3a26d821ad18a5ff742a2fd43078db5d9e0c11bcb0958df53d2fb1c0",
-      "hash": "8c3aa536d79d113e7565fffc47950ebfca486ed2883e0a1f5f37da64698fcb81"
+      "prevHash": "660b680122a6bb24e5f0040d6dfc60230fa0d7aace15ce2608522474f597d599",
+      "hash": "bd67ac2fe4a6d77da15725db0b66ba6e01ad1828968fd9d75a0b7563a0765d7d"
     },
     {
-      "seq": 3,
+      "seq": 7,
       "ts": "2026-09-11T03:10:00.000Z",
       "planId": "PL-0001",
       "action": "review_approved",
       "actorId": "u2",
       "detail": {},
-      "prevHash": "8c3aa536d79d113e7565fffc47950ebfca486ed2883e0a1f5f37da64698fcb81",
-      "hash": "0a88799a340a64b026b64878bb2330f7a3f697db7e6350972dfb28c3677a64a7"
+      "prevHash": "bd67ac2fe4a6d77da15725db0b66ba6e01ad1828968fd9d75a0b7563a0765d7d",
+      "hash": "a28b839c20e0824cc890cc52bf9cd4adef55476c40335f85341ea668305e8c52"
     },
     {
-      "seq": 4,
+      "seq": 8,
       "ts": "2026-09-12T09:00:00.000Z",
       "planId": "PL-0002",
       "action": "plan_created",
@@ -189,11 +264,11 @@
       "detail": {
         "snapshot": "seed"
       },
-      "prevHash": "0a88799a340a64b026b64878bb2330f7a3f697db7e6350972dfb28c3677a64a7",
-      "hash": "e07b486971887ea806afb0480c82aadbb4dac5e47298c0eab6b6ed8fa48f7814"
+      "prevHash": "a28b839c20e0824cc890cc52bf9cd4adef55476c40335f85341ea668305e8c52",
+      "hash": "0f01a2b7a49aed85d3354ad2523a722005ed325f3ab899b5f76fba1b068dca75"
     },
     {
-      "seq": 5,
+      "seq": 9,
       "ts": "2026-09-12T09:00:00.000Z",
       "planId": "PL-0002",
       "action": "plan_submitted",
@@ -201,8 +276,8 @@
       "detail": {
         "resubmit": false
       },
-      "prevHash": "e07b486971887ea806afb0480c82aadbb4dac5e47298c0eab6b6ed8fa48f7814",
-      "hash": "16293480c5d376c23c0badcd6a3c5f0815864ae7a6d9997fc2dc8c007cd7feac"
+      "prevHash": "0f01a2b7a49aed85d3354ad2523a722005ed325f3ab899b5f76fba1b068dca75",
+      "hash": "427458fc56b20aa017179a8996248a568a4270de780498a842cbba9413d16126"
     }
   ]
 }

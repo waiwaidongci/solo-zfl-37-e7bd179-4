@@ -14,7 +14,7 @@
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
   body{background:var(--bg);color:var(--ink);font-family:-apple-system,"PingFang SC","Microsoft YaHei",Arial,sans-serif;font-size:14px}
-  header{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line;padding:10px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line);padding:10px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   header h1{margin:0;font-size:18px;white-space:nowrap}
   header .sub{color:var(--muted);font-size:12px}
   .spacer{flex:1}
@@ -50,14 +50,14 @@
   .card .actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:3px}
   .empty{color:var(--muted);font-size:12px;text-align:center;padding:14px 4px}
   /* 弹层 */
-  .overlay{position:fixed;inset:0;background:rgba(25,32,22,.45);z-index:40;display:none;align-items:flex-start;justify-content:center;padding:26px 14px;overflow-y:auto}
+  .overlay{position:fixed;inset:0;background:rgba(25,32,22,.45);z-index:40;display:none;align-items:center;justify-content:center;padding:20px 14px;overflow-y:auto}
   .overlay.open{display:flex}
-  .modal{background:#fff;border-radius:12px;width:100%;max-width:560px;padding:20px;display:flex;flex-direction:column;gap:4px}
+  .modal{background:#fff;border-radius:12px;width:100%;max-width:560px;max-height:calc(100vh - 40px);overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:4px}
   .modal.wide{max-width:720px}
   .modal h2{margin:0 0 8px;font-size:17px}
   .modal label{display:block;margin:9px 0 4px;color:var(--muted);font-size:12.5px}
   .modal .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .modal .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;flex-wrap:wrap}
+  .modal .foot{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;position:sticky;bottom:-20px;background:#fff;padding:12px 0 6px;margin:-6px 0 -20px}
   .preview{margin-top:10px;border-radius:8px;padding:9px 11px;font-size:12.5px;display:none}
   .preview.show{display:block}
   .preview.ok{background:#e8f2ea;color:var(--ok)}
@@ -85,8 +85,9 @@
     .board{flex-direction:column;overflow:visible;padding:10px 12px 30px}
     .column{flex:none;min-width:0;max-height:none}
     .cards{overflow:visible}
-    .overlay{padding:0}
-    .modal{border-radius:14px 14px 0 0;min-height:100%;max-width:100%;padding:18px 16px 30px}
+    .overlay{padding:0;align-items:stretch}
+    .modal{border-radius:14px 14px 0 0;min-height:100%;max-height:100vh;max-width:100%;padding:18px 16px 30px}
+    .modal .foot{bottom:-30px;margin:-6px 0 -30px}
     .modal .row{grid-template-columns:1fr}
   }
 </style>
@@ -448,7 +449,11 @@ function fillBaseSelectors(selected){
   actorSel.innerHTML = state.users.map(u => `<option value="${u.id}" ${u.id===selected?"selected":""}>${esc(u.name)} · ${esc(u.role)}</option>`).join("");
 }
 function fillFormSelects(){
-  $("#fItem").innerHTML = state.items.map(i => `<option value="${i.code}">${i.code} · ${esc(i.smokeSource)}</option>`).join("");
+  $("#fItem").innerHTML = state.items.map(i => {
+    const legacy = (i.logs?.length || 0) + (i.tests?.length || 0);
+    const title = legacy ? `（历史试磨记录 ${legacy} 条，已归档保留）` : "";
+    return `<option value="${i.code}" title="${legacy ? "历史试磨日志/结果已完整保留" : ""}">${i.code} · ${esc(i.smokeSource)}${title}</option>`;
+  }).join("");
   $("#fStation").innerHTML = state.stations.map(s => `<option value="${s.id}">${s.id} · ${esc(s.name)}</option>`).join("");
   const users = state.users;
   const opOpts = (v) => users.map(u => `<option value="${u.id}" ${u.id===v?"selected":""}>${esc(u.name)} · ${esc(u.role)}</option>`).join("");
@@ -574,16 +579,22 @@ $("#submitBtn").onclick = () => savePlan(true);
 async function openAudit(id){
   $("#drawerTitle").textContent = id ? `审计链 · ${id}` : "全局审计链";
   try{
-    const { events, chainValid } = await api(id ? `/api/events?planId=${encodeURIComponent(id)}` : "/api/events");
-    $("#chainBox").className = "chain " + (chainValid ? "ok" : "bad");
-    $("#chainBox").textContent = chainValid
-      ? `✓ 哈希链校验通过（${events.length} 条记录，仅追加不可改）`
-      : "✗ 哈希链校验失败：审计记录可能被篡改！";
+    const r = await api(id ? `/api/events?planId=${encodeURIComponent(id)}` : "/api/events");
+    const events = r.events;
+    // scope=plan 时序号不连续属正常：以「子集是否与全局链逐哈希一致」为准，区分链损坏与子集
+    const box = $("#chainBox");
+    box.className = "chain " + (r.scopeValid ? "ok" : "bad");
+    box.textContent = r.message;
+    if(r.scope === "plan" && r.chainValid){
+      box.textContent = `✓ ${r.message}`;
+    }else if(r.scope === "plan" && !r.chainValid){
+      box.textContent = `✗ 全局审计链已损坏，本子集无法获得可信背书`;
+    }
     $("#drawerBody").innerHTML = events.slice().reverse().map(ev => {
       const actor = state.users.find(u => u.id === ev.actorId);
       return `<div class="event">
         <div class="ev-title">#${ev.seq} ${ACTION_LABELS[ev.action] || ev.action}</div>
-        <div class="ev-meta">${new Date(ev.ts).toLocaleString("zh-CN")} · ${esc(actor?.name || ev.actorId)}${ev.planId ? " · " + ev.planId : ""}</div>
+        <div class="ev-meta">${new Date(ev.ts).toLocaleString("zh-CN")} · ${esc(actor?.name || ev.actorId || "系统")}${ev.planId ? " · " + ev.planId : ""}</div>
         <pre>${esc(JSON.stringify(ev.detail, null, 2))}</pre>
         <pre title="哈希">hash ${esc(ev.hash.slice(0,20))}…</pre>
       </div>`;

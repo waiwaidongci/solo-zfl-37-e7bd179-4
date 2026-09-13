@@ -166,16 +166,98 @@ function withLock() {
 }
 
 async function initDb() {
+  let migrated = false;
   if (!existsSync(dbPath)) {
     await mkdir(dirname(dbPath), { recursive: true });
     await persist(buildSeed());
   }
   cache = JSON.parse(await readFile(dbPath, "utf8"));
   if (!cache.version || cache.version < 2) {
-    cache = buildSeed();
-    await persist(cache);
+    cache = migrateV1(cache); // 旧版数据无损升级（保留墨锭、试磨日志、试磨结果）
+    migrated = true;
   }
   cache.metrics ||= { conflictRejects: 0 };
+  if (migrated) await persist(cache);
+}
+
+/* ------------------------------------------------------------------ */
+/* 旧版（v1，无 version 字段）数据无损迁移                             */
+/* ------------------------------------------------------------------ */
+
+function migrateV1(old) {
+  const base = buildSeed();
+  const migrated = {
+    version: 2,
+    seq: base.seq,
+    metrics: { conflictRejects: 0 },
+    users: base.users,
+    stations: base.stations,
+    // 原有墨锭完整保留：含全部原始字段（id/code/烟料/胶比/年限/位置/status/试磨日志/试磨结果）
+    items: [],
+    plans: [],   // v1 没有排期概念，不凭空制造
+    occupancy: [],
+    events: [],
+  };
+
+  const seenCodes = new Set();
+  const oldItems = Array.isArray(old.items) ? old.items : [];
+  for (const raw of oldItems) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = structuredClone(raw);
+    // 兼容旧数据以 id 或 code 标识
+    if (!item.code && item.id) item.code = String(item.id);
+    if (!item.code || seenCodes.has(item.code)) continue;
+    seenCodes.add(item.code);
+    // 原样保留 logs（试磨日志）与 tests（试磨结果），不删任何字段
+    item.logs = Array.isArray(item.logs) ? item.logs : [];
+    item.tests = Array.isArray(item.tests) ? item.tests : [];
+    migrated.items.push(item);
+  }
+  // 补充新环境所需的演示台位/墨锭以外，不覆盖任何原有墨锭编号
+  for (const seedItem of base.items) {
+    if (!seenCodes.has(seedItem.code)) { migrated.items.push(seedItem); seenCodes.add(seedItem.code); }
+  }
+
+  // 把每条历史日志/试磨结果固化为只追加审计事件，形成可校验哈希链
+  const append = (e) => {
+    const prevHash = migrated.events.length ? migrated.events[migrated.events.length - 1].hash : "0".repeat(64);
+    e.prevHash = prevHash;
+    e.hash = sha256([e.seq, e.ts, e.planId, e.action, e.actorId, JSON.stringify(e.detail), prevHash].join("|"));
+    migrated.events.push(e);
+  };
+  let seq = 0;
+  for (const item of oldItems) {
+    if (!item || (!item.code && !item.id)) continue;
+    const ref = item.code || String(item.id);
+    append({ seq: ++seq, ts: "2026-01-01T00:00:00.000Z", planId: null, action: "item_imported", actorId: "system",
+      detail: { code: ref, smokeSource: item.smokeSource || "", glueRatio: item.glueRatio || "", status: item.status || "" } });
+    for (const log of item.logs || []) {
+      append({ seq: ++seq, ts: toIso(log.at), planId: null, action: "legacy_log", actorId: "system",
+        detail: { itemCode: ref, at: log.at || null, step: log.step || "", note: log.note || "", score: log.score ?? null } });
+    }
+    for (const test of item.tests || []) {
+      append({ seq: ++seq, ts: toIso(test.at), planId: null, action: "legacy_test", actorId: "system",
+        detail: { itemCode: ref, ...test } });
+    }
+  }
+  append({ seq: ++seq, ts: "2026-09-13T00:00:00.000Z", planId: null, action: "schema_migrated", actorId: "system",
+    detail: { fromVersion: 1, toVersion: 2, itemsImported: oldItems.length, legacyLogs: migrated.events.filter(e => e.action === "legacy_log").length, legacyTests: migrated.events.filter(e => e.action === "legacy_test").length } });
+
+  // 预置的演示排期挂在其后（若与旧墨锭编号冲突也不覆盖数据，仅占用演示时段）
+  migrated.plans = base.plans;
+  migrated.occupancy = base.occupancy;
+  for (const e of base.events) {
+    append({ seq: ++seq, ts: e.ts, planId: e.planId, action: e.action, actorId: e.actorId, detail: e.detail });
+  }
+  return migrated;
+}
+
+// 旧日志的 at 可能是 "2026-06-11" 这样的日期串，统一成合法 ISO
+function toIso(v) {
+  if (!v) return "2026-01-01T00:00:00.000Z";
+  const t = Date.parse(v);
+  if (Number.isNaN(t)) return "2026-01-01T00:00:00.000Z";
+  return new Date(t).toISOString();
 }
 
 async function persist(db) {
@@ -641,8 +723,40 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/events") {
       const planId = url.searchParams.get("planId");
-      const events = planId ? readDb().events.filter((e) => e.planId === planId) : readDb().events;
-      return sendJson(res, 200, { events, chainValid: verifyChain(events) });
+      const all = readDb().events;
+      const globalValid = verifyChain(all);
+      if (!planId) {
+        return sendJson(res, 200, {
+          scope: "global",
+          events: all,
+          chainValid: globalValid,
+          scopeValid: globalValid,
+          verified: globalValid,
+          contiguous: true,
+          message: globalValid ? "全局审计链完整" : "全局审计链已损坏",
+        });
+      }
+      // 子集视图：序号本来就不连续，不能套用全链校验。
+      // 子集可信的充要条件：全局链有效，且子集每条记录按 seq 与全局记录逐一比对（含哈希）完全一致。
+      const bySeq = new Map(all.map((e) => [e.seq, e]));
+      const subset = all.filter((e) => e.planId === planId);
+      const subsetValid = globalValid && subset.every((e) => {
+        const g = bySeq.get(e.seq);
+        return g && JSON.stringify(g) === JSON.stringify(e);
+      });
+      return sendJson(res, 200, {
+        scope: "plan",
+        planId,
+        events: subset,
+        chainValid: globalValid, // 全链是否完好
+        scopeValid: subsetValid, // 本子集是否为全链中未被篡改的真实切片
+        verified: subsetValid,
+        contiguous: false,
+        subsetOfGlobal: true,
+        message: subsetValid
+          ? `本排期 ${subset.length} 条记录已与全局链（共 ${all.length} 条）逐哈希核对一致`
+          : "记录与全局链不一致：全局链损坏或该子集被篡改",
+      });
     }
 
     if (req.method === "POST" && url.pathname === "/api/items") {

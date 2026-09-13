@@ -1,10 +1,16 @@
 {
   "name": "zfl-37-ink-stick-testing",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/run-tests.mjs"
+    "test": "node test/run-tests.mjs",
+    "test:migration": "node test/migration-tests.mjs",
+    "test:browser": "node test/browser-all.mjs",
+    "test:all": "node test/run-tests.mjs && node test/migration-tests.mjs && node test/browser-all.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
   }
 }
